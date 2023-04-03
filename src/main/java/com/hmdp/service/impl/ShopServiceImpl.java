@@ -10,6 +10,7 @@ import com.hmdp.entity.Shop;
 import com.hmdp.mapper.ShopMapper;
 import com.hmdp.service.IShopService;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
+import com.hmdp.utils.CacheClient;
 import com.hmdp.utils.RedisData;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
@@ -39,17 +40,21 @@ public class ShopServiceImpl extends ServiceImpl<ShopMapper, Shop> implements IS
     @Resource
     private StringRedisTemplate stringRedisTemplate;
 
+    @Resource
+    private CacheClient cacheClient;
+
 
     @Override
     public Result queryById(Long id) {
         //防止缓存穿透
-//        Shop shop = queryWithPassThrough(id);
+//        Shop shop = cacheClient.queryWithPassThrough(CACHE_SHOP_KEY,id,Shop.class,this::getById,CACHE_SHOP_TTL,TimeUnit.MINUTES);
 
         //互斥锁解决缓存击穿
 //        Shop shop = queryWithMutex(id);
 
         //用逻辑过期解决缓存击穿
-        Shop shop = queryWithLogicalExpire(id);
+//        Shop shop = queryWithLogicalExpire(id);
+        Shop shop = cacheClient.queryWithLogicalExpire(CACHE_SHOP_KEY,id,Shop.class,this::getById,CACHE_SHOP_TTL,TimeUnit.SECONDS);
 
         if(shop==null){
             return Result.fail("店铺不存在!");
@@ -120,42 +125,6 @@ public class ShopServiceImpl extends ServiceImpl<ShopMapper, Shop> implements IS
 
     private static final ExecutorService CACHE_REBUILD_EXECUTOR= Executors.newFixedThreadPool(10);
 
-
-    /**
-     * 防止缓存穿透
-     * @param id
-     * @return
-     */
-    public Shop queryWithLogicalExpire(Long id){
-        String shopJson = stringRedisTemplate.opsForValue().get(CACHE_SHOP_KEY + id);
-        if(StrUtil.isBlank(shopJson)){
-            return null;
-        }
-
-        RedisData redisData = JSONUtil.toBean(shopJson, RedisData.class);
-        Shop shop = JSONUtil.toBean((JSONObject) redisData.getData(), Shop.class);
-        LocalDateTime expireTime = redisData.getExpireTime();
-        if(expireTime.isAfter(LocalDateTime.now())){
-            return shop;
-        }
-        String lockKey=LOCK_SHOP_KEY+id;
-
-        boolean isLock = tryLock(lockKey);
-
-        if(isLock){
-            CACHE_REBUILD_EXECUTOR.submit(()->{
-                try{
-                    saveShop2Redis(id,20L);
-                }catch (Exception e){
-                    throw new RuntimeException(e);
-                }finally {
-                    unlock(lockKey);
-                }
-            });
-        }
-
-        return shop;
-    }
 
 
 
